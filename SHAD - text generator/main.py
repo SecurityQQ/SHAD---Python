@@ -1,17 +1,11 @@
-# parser = argparse.ArgumentParser()
-#     parser.add_argument('mode', choices=['sort', 'random'],
-#                         help='Mode for words shuffling.')
-#     parser.add_argument('filename', help='File to work with.')
-#
-#     args = parser.parse_args()
-#
-#     with codecs.open(args.filename, encoding='utf-8') as input_file:
-#         base_text = input_file.read()
-#
-#     print shuffle_letters(base_text, args.mode).encode('utf-8')
-#
+#!/usr/bin/env python3
 import string
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict
+import random
+import argparse
+import sys
+import unittest
+
 
 class Utils(object):
 
@@ -31,7 +25,7 @@ class Utils(object):
         new_parts = []
         for part in parts:
             new_parts += Utils.split_symbol(part, symbol, drop_symbol)
-        return [*filter(lambda x: len(x) != 0, new_parts)]
+        return [s for s in filter(lambda x: len(x) != 0, new_parts)]
 
     @staticmethod
     def split(text, delimiters, delimiters_to_drop=[]):
@@ -84,15 +78,17 @@ class Utils(object):
 
     @staticmethod
     def count_probabilities(chains):
-        probabilities = dict()
+        chains_with_probabilities = OrderedDict()
         for key, values in chains.items():
             counts = Counter(values)
             total = len(values)
-            next_words = []
+            probabilities = OrderedDict()
             for v in values:
-                next_words += [(v, counts[v] / total)]
-            probabilities[key] = Utils.unique(next_words)
-        return probabilities
+                probabilities[v] = counts[v] / total
+            chains_with_probabilities[key] = OrderedDict(sorted(list(probabilities.items()),
+                                                                key=lambda x: x[0])
+                                                         )
+        return OrderedDict(sorted(chains_with_probabilities.items(), key=lambda x: x[0]))
 
     @staticmethod
     def unique(l):
@@ -102,62 +98,153 @@ class Utils(object):
         """
         return list(set(l))
 
+
 class TokenizeTask(object):
     def __init__(self, text):
         self.text = text
         self.tokens = Utils.tokenize(self.text)
 
     def __str__(self):
-       return '\n'.join([s[0] for s in self.tokens])
+        return '\n'.join([s[0] for s in self.tokens])
 
 
 class CalculateProbabilitiesTask(object):
     def __init__(self, text, depth=1):
         self.text = text.replace('\n', '')
         self.chains = [Utils.get_chains(text, depth=i) for i in range(0, depth + 1)]
-        self.probabilities = [list(Utils.count_probabilities(chain).items()) for chain in self.chains]
-        for chain in self.probabilities:
-            chain.sort(key=lambda x: x[0])  # sorting by history of chain
-            for hist_to_future in chain:
-                hist_to_future[1].sort(key=lambda x: x[0])  # sorting by next_word
+        self.probabilities = [Utils.count_probabilities(chain) for chain in self.chains]
 
-    # def __str__(self):
-    #     retu
-    #     for chain in self.probabilities:
-    #
-    #
-    #     ans = []
-    #     for token in sorted(Utils.unique(self.tokens)):
-    #         ans.append("  {}: {:.2}\n".format(' '.join(token), self.probabilities_per_word[token]))
-    #     return ''.join(ans)
+    def __str__(self):
+        ans = []
+        for pr_per_level in self.probabilities:
+            for history, future in pr_per_level.items():
+                ans.append(' '.join(history))
+                for next_word, p in future.items():
+                    ans.append('  {}: {:0.2}'.format(next_word, p))
+        return '\n'.join(ans)
 
 
-s = """First test sentence
-       aecond test line test sentence becond"""
-# print(TokenizeTask('Hello, shitty world! Hello!'))
+class TextGenerator(object):
+    def __init__(self, depth=1, size=20):
+        self.depth = depth
+        self.size = size
+        self.probabilities = []
 
-# print(Utils.tokenize('Hello, shitty world! Hello!', 3, drop_whitespace=True)) #, 1, drop_whitespace=False))
+    def fit(self, text):
+        prob_task = CalculateProbabilitiesTask(text, self.depth)
+        self.probabilities = prob_task.probabilities
 
-# print(CalculateProbabilitiesTask(s, depth=1))
+    def generate(self):
+        generated_words = []
+        new_word = self.__choice(self.probabilities[0][()])
+        generated_words.append(new_word)
 
-# print(Utils.get_chains(s, depth=0))
-from pprint import pprint
-pr = CalculateProbabilitiesTask(s, depth=3).probabilities
-ans = []
-for depth in range(len(pr)):
+        for i in range(1, self.size):
+            slice_size = min(self.depth - 1, i)
+            prev_chain = tuple(generated_words[-slice_size:])
+            while prev_chain not in self.probabilities[slice_size]:
+                slice_size -= 1
+                prev_chain = tuple(generated_words[-slice_size:])
 
-    # print(pr[depth])
-    # for chain in self.probabilities:
-    #     chain.sort(key=lambda x: x[0])  # sorting by history of chain
-    #     for hist_to_future in chain:
-    #         hist_to_future[1].sort(key=lambda x: x[0])  # sorting by next_word
+            new_word = self.__choice(self.probabilities[slice_size][prev_chain])
+            generated_words.append(new_word)
+        generated_words[0] = generated_words[0].capitalize()
+        return ' '.join(generated_words)
 
-    for hist_to_future in pr[depth]:
-        # print(hist_to_future)
-        history, future = hist_to_future
-        if len(history) != 0:  # we don't want extra \n in beginning
-            ans.append(' '.join(history))
-        for next_word, p in future:
-            ans.append('  {}: {:0.2}'.format(next_word, p))
+    def __choice(self, future):
+        total_prob = 0
+        for next_word, p in future.items():
+            total_prob += p
+        result = random.uniform(0, total_prob)
+        lower_bound = 0
+        for next_word, p in future.items():
+            lower_bound += p
+            if lower_bound > result:
+                return next_word
 
-print('\n'.join(ans))
+
+class UnitTest(unittest.TestCase):
+    @staticmethod
+    def test_tokenize():
+        res = TokenizeTask('1234 5678, 9101112! We love BMW and you love')
+        answer = [
+                    '1234',
+                    ' ',
+                    '5678',
+                    ',',
+                    ' ',
+                    '9101112',
+                    '!',
+                    ' ',
+                    'We',
+                    ' ',
+                    'love',
+                    ' ',
+                    'BMW',
+                    ' ',
+                    'and',
+                    ' ',
+                    'you',
+                    ' ',
+                    'love'
+                ]
+        assert([x[0] for x in res.tokens] == answer)
+
+    @staticmethod
+    def test_probabilities_calculation():
+        result = CalculateProbabilitiesTask('First test Second test', depth=1).__str__().split()
+        answer = """  First: 0.25
+                  Second: 0.25
+                  test: 0.5
+                First
+                  test: 1.0
+                Second
+                  test: 1.0
+                test
+                  Second: 1.0
+                """.split()
+        assert(result == answer)
+
+    @staticmethod
+    def test_generation():
+        try:
+            generator = TextGenerator(depth=3, size=5)
+            generator.fit("а блоки, каждый блок соответствует цепочке истории")
+            generator.generate()
+        except _:
+            assert False
+
+parser = argparse.ArgumentParser()
+first_line = input().split()
+if first_line[0] == 'tokenize':
+    line = str(input())
+    print(TokenizeTask(line))
+
+elif first_line[0] == 'probabilities':
+    parser.add_argument('--depth')
+    parser.add_argument('probabilities')
+    args = parser.parse_args(first_line)
+    depth = int(args.depth)
+    text = []
+    for line in sys.stdin.readlines():
+        text += [line]
+    text = ' '.join(text)
+    print(CalculateProbabilitiesTask(text, depth=depth))
+
+elif first_line[0] == 'generate':
+    parser.add_argument('--depth')
+    parser.add_argument('--size')
+    args = parser.parse_args(first_line)
+    depth = int(args.depth)
+    size = int(args.size)
+    for line in sys.readlines():
+        text += [line]
+    text = ' '.join(text)
+    tg = TextGenerator(depth=depth, size=size)
+    tg.fit(text)
+    tg.generate()
+
+elif first_line[0] == 'test':
+    unittest.main()
+else:
+    assert False
