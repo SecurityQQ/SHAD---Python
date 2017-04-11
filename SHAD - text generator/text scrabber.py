@@ -20,5 +20,5 @@ def do_something():
             soup = bs4.BeautifulSoup(html_doc, 'html.parser')
             s = soup.find_all('div', 'entry')[0]
             learning_text += s.get_text()
-        except:  # just don't care about some troubles
+        except _:  # just don't care about some troubles
             pass

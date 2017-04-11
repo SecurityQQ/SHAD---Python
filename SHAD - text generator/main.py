@@ -21,6 +21,45 @@ class Utils(object):
         return result[:-1]
 
     @staticmethod
+    def split_for_tokens(text):
+        splited = []
+        number = ''
+        word = ''
+        other = ''
+        for i in range(len(text)):
+            if text[i].isdigit():
+                if len(other) > 0:
+                    splited += [other]
+                    other = ''
+                if len(word) > 0:
+                    splited += [word]
+                    word = ''
+                number += text[i]
+            elif text[i].isalpha():
+                if len(other) > 0:
+                    splited += [other]
+                    other = ''
+                if len(number) > 0:
+                    splited += [number]
+                    number = ''
+                word += text[i]
+            else:
+                if len(word) > 0:
+                    splited += [word]
+                    word = ''
+                if len(number) > 0:
+                    splited += [number]
+                    number = ''
+                other += text[i]
+        if len(word) > 0:
+            splited += [word]
+        if len(number) > 0:
+            splited += [number]
+        if len(other) > 0:
+            splited += [other]
+        return splited
+
+    @staticmethod
     def parts_split_symbol(parts, symbol, drop_symbol=False):
         new_parts = []
         for part in parts:
@@ -44,7 +83,10 @@ class Utils(object):
         for symbol in delimiters:
             parts = Utils.parts_split_symbol(parts, symbol, drop_symbol=False)
 
-        return parts
+        new_parts = []
+        for part in parts:
+            new_parts += Utils.split_for_tokens(part)
+        return new_parts
 
     @staticmethod
     def tokenize(text, depth=1, drop_whitespace=False):
@@ -58,8 +100,8 @@ class Utils(object):
         delimiters = []
         delimiters_to_drop = []
         if drop_whitespace:
-            delimiters = string.punctuation
-            delimiters_to_drop = string.whitespace
+            delimiters = []
+            delimiters_to_drop = string.whitespace + string.punctuation
         else:
             delimiters = string.punctuation + string.whitespace
 
@@ -68,12 +110,14 @@ class Utils(object):
 
     @staticmethod
     def get_chains(text, depth=1):
-        chains_with_future = Utils.tokenize(text, depth + 1, drop_whitespace=True)
+        splited_text = text.split('\n')
         chains = dict()
-        for item in chains_with_future:
-            if item[:depth] not in chains:
-                chains[item[:depth]] = []
-            chains[item[:depth]] += item[depth:]
+        for line in splited_text:
+            chains_with_future = Utils.tokenize(line, depth + 1, drop_whitespace=True)
+            for item in chains_with_future:
+                if item[:depth] not in chains:
+                    chains[item[:depth]] = []
+                chains[item[:depth]] += item[depth:]
         return chains
 
     @staticmethod
@@ -110,17 +154,21 @@ class TokenizeTask(object):
 
 class CalculateProbabilitiesTask(object):
     def __init__(self, text, depth=1):
-        self.text = text.replace('\n', '')
         self.chains = [Utils.get_chains(text, depth=i) for i in range(0, depth + 1)]
         self.probabilities = [Utils.count_probabilities(chain) for chain in self.chains]
 
     def __str__(self):
+        pr = []
+        for d in self.probabilities:
+            for key, values in d.items():
+                pr += [(key, values)]
+        pr = sorted(pr, key=lambda x: x[0])
         ans = []
-        for pr_per_level in self.probabilities:
-            for history, future in pr_per_level.items():
-                ans.append(' '.join(history))
-                for next_word, p in future.items():
-                    ans.append('  {}: {:0.2}'.format(next_word, p))
+        for pr_per_level in pr:
+            history, values = pr_per_level[0], pr_per_level[1]
+            ans.append(' '.join(history))
+            for next_word, p in values.items():
+                ans.append('  {}: {:.2f}'.format(next_word, p))
         return '\n'.join(ans)
 
 
@@ -145,7 +193,10 @@ class TextGenerator(object):
             while prev_chain not in self.probabilities[slice_size]:
                 slice_size -= 1
                 prev_chain = tuple(generated_words[-slice_size:])
-
+                if (slice_size < 0):
+                    slice_size = 0
+                    prev_chain = ()
+                    break
             new_word = self.__choice(self.probabilities[slice_size][prev_chain])
             generated_words.append(new_word)
         generated_words[0] = generated_words[0].capitalize()
@@ -193,16 +244,12 @@ class UnitTest(unittest.TestCase):
     @staticmethod
     def test_probabilities_calculation():
         result = CalculateProbabilitiesTask('First test Second test', depth=1).__str__().split()
-        answer = """  First: 0.25
-                  Second: 0.25
-                  test: 0.5
-                First
-                  test: 1.0
-                Second
-                  test: 1.0
-                test
-                  Second: 1.0
-                """.split()
+        answer = ['First:', '0.25',
+                  'Second:', '0.25',
+                  'test:', '0.50',
+                  'First', 'test:', '1.00',
+                  'Second', 'test:', '1.00',
+                  'test', 'Second:', '1.00']
         assert(result == answer)
 
     @staticmethod
@@ -232,12 +279,14 @@ elif first_line[0] == 'probabilities':
     print(CalculateProbabilitiesTask(text, depth=depth))
 
 elif first_line[0] == 'generate':
+    parser.add_argument('generate')
     parser.add_argument('--depth')
     parser.add_argument('--size')
     args = parser.parse_args(first_line)
     depth = int(args.depth)
     size = int(args.size)
-    for line in sys.readlines():
+    text = []
+    for line in sys.stdin.readlines():
         text += [line]
     text = ' '.join(text)
     tg = TextGenerator(depth=depth, size=size)
